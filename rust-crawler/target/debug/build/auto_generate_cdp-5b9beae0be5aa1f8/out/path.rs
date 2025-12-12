@@ -1,0 +1,1 @@
+pub const MANIFEST_DIR: &str = "/home/guest/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_generate_cdp-0.4.5";
