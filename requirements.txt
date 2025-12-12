@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+requests
+beautifulsoup4
+lxml
+sqlalchemy
+pydantic-settings
+tenacity
+pytest
+httpx
+trafilatura

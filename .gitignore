@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv
+env/
+venv/
+
+# Environment variables
+.env
+
+# Secrets
+*.pem
+*.key
+
+# Database
+*.db
+*.sqlite
+
+# Data
+crawled_data/
+debug_bing.xml
+debug_bing.html
+
+# Archives
+*.tar.gz
+*.zip
+
+# IDEs
+.vscode/
+.idea/
