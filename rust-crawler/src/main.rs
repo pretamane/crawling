@@ -28,6 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/crawl", post(api::trigger_crawl))
+        .route("/crawl/:task_id", get(api::get_crawl_status))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;

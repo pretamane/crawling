@@ -27,7 +27,7 @@ def search_bing(keyword):
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "en-US,en;q=0.9",
     }
-    url = f"{settings.BING_SEARCH_URL}?format=rss&q={keyword}"
+    url = f"{settings.BING_SEARCH_URL}?format=rss&q={keyword}&cc=US"
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
