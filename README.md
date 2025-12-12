@@ -1,11 +1,27 @@
 # Bing Crawling API - Developer Handoff
 
 ## 1. Project Overview
-This is a production-grade FastAPI service that:
-1.  **Searches Bing** for travel/tourism keywords (using RSS to bypass bots).
-2.  **Crawls** the results asynchronously.
-3.  **Extracts "Maxi Quality" Content**: Uses `trafilatura` to get clean text, author, date, and description.
-4.  **Persists Data**: Stores everything in a SQLite database (`crawling.db`).
+This repository contains two implementations of the Bing Crawler:
+
+### 📂 `rust-crawler/` (Recommended)
+The new, high-performance **Rust** implementation.
+- **Features**: PostgreSQL storage, Headless Chrome scraping, Axum API.
+- **Status**: Active Development / Production Ready.
+
+### 📂 `python-crawler/` (Legacy)
+The original **Python** implementation.
+- **Features**: SQLite storage, Trafilatura extraction, FastAPI.
+- **Status**: Maintenance Mode.
+
+## 2. Quick Start (Rust)
+```bash
+# Start Database
+docker-compose up -d
+
+# Run Crawler
+cd rust-crawler
+cargo run
+```
 
 ## 2. Server Access (AWS)
 - **Instance Name**: `sg crawling`
