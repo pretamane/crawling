@@ -56,7 +56,7 @@ RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key
 
 WORKDIR /app
 COPY --from=builder /app/target/release/rust-crawler /app/rust-crawler
-COPY .env .env
+
 
 EXPOSE 3000
 
