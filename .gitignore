@@ -30,3 +30,15 @@ debug_bing.html
 # IDEs
 .vscode/
 .idea/
+
+# Rust Crawler Artifacts
+rust-crawler/target/
+rust-crawler/debug/
+rust-crawler/logs/
+rust-crawler/crawl-results/
+crawl-results/
+
+# Docker Volumes
+postgres_data/
+caddy_data/
+caddy_config/

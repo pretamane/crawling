@@ -76,16 +76,15 @@ pub async fn trigger_crawl(
         };
 
         match search_results {
-            Ok(results) => {
+            Ok(serp_data) => {
                 // 2. Extract content from the first result (Deep Crawl)
-                let extracted_content = if let Some(first_result) = results.first() {
-                    crawler::extract_content(&first_result.link).await.unwrap_or_default()
+                let first_result_data = if let Some(first_result) = serp_data.results.first() {
+                    crawler::extract_website_data(&first_result.link).await.ok()
                 } else {
-                    crawler::ExtractedContent::default()
+                    None
                 };
 
-
-                let results_json = serde_json::to_string(&results).unwrap_or_default();
+                let results_json = serde_json::to_string(&serp_data).unwrap_or_default();
 
                 // 3. Save to Disk (User Requirement)
                 let storage_path = std::env::var("STORAGE_PATH").unwrap_or_else(|_| "crawl-results".to_string());
@@ -97,7 +96,7 @@ pub async fn trigger_crawl(
                 let filename_base = format!("{}/{}_{}_{}", storage_path, safe_keyword, engine, task_id_clone);
 
                 // Decode Bing/Google redirect URLs to get actual website list
-                let websites: Vec<String> = results.iter().map(|r| {
+                let websites: Vec<String> = serp_data.results.iter().map(|r| {
                     crawler::decode_search_url(&r.link)
                 }).collect();
 
@@ -106,9 +105,9 @@ pub async fn trigger_crawl(
                     "keyword": &keyword,
                     "engine": &engine,
                     "websites": &websites,
-                    "results": &results,
-                    "first_page_html_file": format!("{}.html", filename_base),
-                    "results_count": results.len()
+                    "serp_data": &serp_data,
+                    "first_result_data": &first_result_data,
+                    "results_count": serp_data.results.len()
                 });
 
                 // Save JSON (pretty-printed for readability)
@@ -117,9 +116,22 @@ pub async fn trigger_crawl(
                     eprintln!("Failed to write JSON: {}", e);
                 }
 
+                // Prepare data for DB
+                let (extracted_text, extracted_html, md, ma, mdate) = if let Some(data) = &first_result_data {
+                    (
+                        data.main_text.clone(),
+                        data.html.clone(),
+                        data.meta_description.clone(),
+                        data.meta_author.clone(),
+                        data.meta_date.clone()
+                    )
+                } else {
+                    (String::new(), String::new(), None, None, None)
+                };
+
                 // Save HTML
-                if !extracted_content.html.is_empty() {
-                    if let Err(e) = std::fs::write(format!("{}.html", filename_base), &extracted_content.html) {
+                if !extracted_html.is_empty() {
+                    if let Err(e) = std::fs::write(format!("{}.html", filename_base), &extracted_html) {
                         eprintln!("Failed to write HTML: {}", e);
                     }
                 }
@@ -132,11 +144,11 @@ pub async fn trigger_crawl(
                 .bind(&keyword)
                 .bind(&engine_clone)
                 .bind(&results_json)
-                .bind(&extracted_content.text)
-                .bind(&extracted_content.html)
-                .bind(&extracted_content.meta_description)
-                .bind(&extracted_content.meta_author)
-                .bind(&extracted_content.meta_date)
+                .bind(&extracted_text)
+                .bind(&extracted_html)
+                .bind(&md)
+                .bind(&ma)
+                .bind(&mdate)
                 .execute(&pool)
                 .await;
             }

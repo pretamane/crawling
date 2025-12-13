@@ -2009,6 +2009,7 @@ dependencies = [
  "once_cell",
  "rand 0.8.5",
  "readability",
+ "regex",
  "reqwest",
  "rss",
  "scraper",

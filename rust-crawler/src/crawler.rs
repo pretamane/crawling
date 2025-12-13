@@ -6,6 +6,7 @@ use std::io::Cursor;
 use std::time::Duration;
 use tokio::time::sleep;
 use once_cell::sync::Lazy;
+use regex::Regex;
 
 // Import from new proxy module
 use crate::proxy::{PROXY_MANAGER, generate_proxy_auth_extension};
@@ -21,11 +22,96 @@ static USER_AGENTS: Lazy<Vec<&'static str>> = Lazy::new(|| {
     ]
 });
 
+// ============================================================================
+// Enhanced Data Structures for Deep Extraction
+// ============================================================================
+
+/// Basic search result from SERP
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchResult {
     pub title: String,
     pub link: String,
     pub snippet: String,
+}
+
+/// Enhanced SERP data with additional extracted elements
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SerpData {
+    /// Organic search results
+    pub results: Vec<SearchResult>,
+    /// "People Also Ask" questions (Google)
+    pub people_also_ask: Vec<String>,
+    /// Related searches at bottom of page
+    pub related_searches: Vec<String>,
+    /// Featured snippet if present
+    pub featured_snippet: Option<FeaturedSnippet>,
+    /// Total results count (if shown)
+    pub total_results: Option<String>,
+}
+
+/// Featured snippet content
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FeaturedSnippet {
+    pub content: String,
+    pub source_url: Option<String>,
+    pub source_title: Option<String>,
+}
+
+/// Deep website data extraction
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct WebsiteData {
+    // Basic metadata
+    pub url: String,
+    pub final_url: String,
+    pub title: String,
+    pub meta_description: Option<String>,
+    pub meta_keywords: Option<String>,
+    pub meta_author: Option<String>,
+    pub meta_date: Option<String>,
+    
+    // Content extraction
+    pub main_text: String,
+    // HTML content (for saving to file)
+    #[serde(skip)] 
+    pub html: String,
+    pub word_count: u32,
+    pub html_size: u32,
+    
+    // Structured data (JSON-LD, Schema.org)
+    pub schema_org: Vec<serde_json::Value>,
+    
+    // Open Graph data
+    pub og_title: Option<String>,
+    pub og_description: Option<String>,
+    pub og_image: Option<String>,
+    pub og_type: Option<String>,
+    
+    // Contact information
+    pub emails: Vec<String>,
+    pub phone_numbers: Vec<String>,
+    
+    // Media
+    pub images: Vec<ImageData>,
+    
+    // Links
+    pub outbound_links: Vec<String>,
+}
+
+/// Image data with metadata
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ImageData {
+    pub src: String,
+    pub alt: Option<String>,
+    pub title: Option<String>,
+}
+
+/// Complete crawl result with all extracted data
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct CrawlResult {
+    pub keyword: String,
+    pub engine: String,
+    pub serp_data: SerpData,
+    pub first_result_data: Option<WebsiteData>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -37,7 +123,110 @@ pub struct ExtractedContent {
     pub meta_date: Option<String>,
 }
 
-pub async fn search_bing(keyword: &str) -> Result<Vec<SearchResult>> {
+// ============================================================================
+// Extraction Helper Functions
+// ============================================================================
+
+/// Extract emails from text using regex
+pub fn extract_emails(text: &str) -> Vec<String> {
+    let email_regex = Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap();
+    email_regex
+        .find_iter(text)
+        .map(|m| m.as_str().to_string())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Extract phone numbers from text using regex
+pub fn extract_phone_numbers(text: &str) -> Vec<String> {
+    let phone_regex = Regex::new(r"[\+]?[(]?[0-9]{1,3}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{1,4}[-\s\.]?[0-9]{1,9}").unwrap();
+    phone_regex
+        .find_iter(text)
+        .map(|m| m.as_str().to_string())
+        .filter(|p| p.len() >= 7) // Filter out short matches
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Extract Schema.org JSON-LD data from HTML
+pub fn extract_schema_org(html: &str) -> Vec<serde_json::Value> {
+    let document = Html::parse_document(html);
+    let selector = Selector::parse("script[type='application/ld+json']").unwrap();
+    
+    document
+        .select(&selector)
+        .filter_map(|el| {
+            let json_text = el.text().collect::<String>();
+            serde_json::from_str(&json_text).ok()
+        })
+        .collect()
+}
+
+/// Extract Open Graph metadata
+pub fn extract_open_graph(document: &Html) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+    let og_title = document
+        .select(&Selector::parse("meta[property='og:title']").unwrap())
+        .next()
+        .and_then(|el| el.value().attr("content").map(|s| s.to_string()));
+    
+    let og_description = document
+        .select(&Selector::parse("meta[property='og:description']").unwrap())
+        .next()
+        .and_then(|el| el.value().attr("content").map(|s| s.to_string()));
+    
+    let og_image = document
+        .select(&Selector::parse("meta[property='og:image']").unwrap())
+        .next()
+        .and_then(|el| el.value().attr("content").map(|s| s.to_string()));
+    
+    let og_type = document
+        .select(&Selector::parse("meta[property='og:type']").unwrap())
+        .next()
+        .and_then(|el| el.value().attr("content").map(|s| s.to_string()));
+    
+    (og_title, og_description, og_image, og_type)
+}
+
+/// Extract images with metadata
+pub fn extract_images(document: &Html, base_url: &str) -> Vec<ImageData> {
+    let img_selector = Selector::parse("img").unwrap();
+    
+    document
+        .select(&img_selector)
+        .filter_map(|el| {
+            let src = el.value().attr("src").or_else(|| el.value().attr("data-src"))?;
+            // Skip tiny/tracking pixels
+            if src.contains("1x1") || src.contains("pixel") || src.len() < 10 {
+                return None;
+            }
+            Some(ImageData {
+                src: if src.starts_with("http") { src.to_string() } else { format!("{}{}", base_url, src) },
+                alt: el.value().attr("alt").map(|s| s.to_string()),
+                title: el.value().attr("title").map(|s| s.to_string()),
+            })
+        })
+        .take(20) // Limit to first 20 images
+        .collect()
+}
+
+/// Extract outbound links
+pub fn extract_outbound_links(document: &Html, base_domain: &str) -> Vec<String> {
+    let link_selector = Selector::parse("a[href]").unwrap();
+    
+    document
+        .select(&link_selector)
+        .filter_map(|el| el.value().attr("href").map(|s| s.to_string()))
+        .filter(|href| href.starts_with("http") && !href.contains(base_domain))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .take(50) // Limit to 50 links
+        .collect()
+}
+
+
+pub async fn search_bing(keyword: &str) -> Result<SerpData> {
     use rand::seq::SliceRandom;
     // Select a random User-Agent
     let user_agent = USER_AGENTS.choose(&mut rand::thread_rng())
@@ -237,27 +426,12 @@ pub async fn search_bing(keyword: &str) -> Result<Vec<SearchResult>> {
     println!("Waiting for Bing DOM mutations to complete...");
     sleep(Duration::from_secs(2)).await;  // Simple wait for page to settle
     
-    let wait_script = r#"
-        new Promise((resolve) => {
-            let timeout;
-            let mutationCount = 0;
-            const observer = new MutationObserver(() => {
-                mutationCount++;
-                clearTimeout(timeout);
-                timeout = setTimeout(() => {
-                    observer.disconnect();
-                    resolve("mutations_complete");
-                }, 500);  // Reduced from 1000ms
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-            setTimeout(() => {
-                observer.disconnect();
-                resolve("timeout_reached");
-            }, 3000);  // Reduced from 8000ms
-        });
-    "#;
-    let wait_result = tab.evaluate(wait_script, true)?;
-    println!("Bing DOM wait result: {:?}", wait_result.value);
+    // Wait for results to appear
+    println!("Waiting for Bing results...");
+    match tab.wait_for_element_with_custom_timeout("li.b_algo", Duration::from_secs(10)) {
+        Ok(_) => println!("Found results element."),
+        Err(e) => println!("Wait for results timed out or failed: {}", e),
+    }
     
     // Take screenshot for debugging
     println!("Capturing Bing screenshot...");
@@ -344,10 +518,30 @@ pub async fn search_bing(keyword: &str) -> Result<Vec<SearchResult>> {
             .and_then(|mut f| std::io::Write::write_all(&mut f, log_entry.as_bytes()));
     }
 
-    Ok(results)
+    // Extract Related Searches (Bing)
+    let related_selector = Selector::parse("li.b_ans ul li a, .b_rs ul li a").unwrap();
+    let mut related_searches = Vec::new();
+    for element in document.select(&related_selector) {
+         if let Some(text) = element.text().next() {
+             related_searches.push(text.to_string());
+         }
+    }
+    
+    // Extract Total Results
+    let count_selector = Selector::parse(".sb_count").unwrap();
+    let total_results = document.select(&count_selector).next()
+        .map(|e| e.text().collect::<String>());
+
+    Ok(SerpData {
+        results,
+        people_also_ask: vec![], // Bing PAA is complex, skipping for now
+        related_searches,
+        featured_snippet: None,
+        total_results,
+    })
 }
 
-pub async fn search_google(keyword: &str) -> Result<Vec<SearchResult>> {
+pub async fn search_google(keyword: &str) -> Result<SerpData> {
     use rand::seq::SliceRandom;
     // Select a random User-Agent
     let user_agent = USER_AGENTS.choose(&mut rand::thread_rng())
@@ -453,6 +647,9 @@ pub async fn search_google(keyword: &str) -> Result<Vec<SearchResult>> {
     println!("Navigating to Google Home...");
     tab.navigate_to("https://www.google.com/?hl=en")?;
     tab.wait_until_navigated()?;
+    
+    // Random wait to simulate reading
+    sleep(Duration::from_millis(3000 + (rand::random::<u64>() % 2000))).await;
 
     // Handle consent page (if present)
     println!("Checking for consent page...");
@@ -480,6 +677,31 @@ pub async fn search_google(keyword: &str) -> Result<Vec<SearchResult>> {
             tab.wait_until_navigated()?;
         }
     }
+    
+    // Human-like mouse movement (entropy)
+    println!("Simulating human mouse movements...");
+    let _ = tab.evaluate(r#"
+        async function humanMouseMove(startX, startY, endX, endY, steps) {
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                // Linear interpolation with jitter
+                const x = startX + (endX - startX) * t + (Math.random() - 0.5) * 5;
+                const y = startY + (endY - startY) * t + (Math.random() - 0.5) * 5;
+                document.dispatchEvent(new MouseEvent('mousemove', {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: x,
+                    clientY: y
+                }));
+                await new Promise(r => setTimeout(r, 10 + Math.random() * 20));
+            }
+        }
+        // Move towards the search box (approx center of screen)
+        humanMouseMove(100, 100, window.innerWidth/2, window.innerHeight/2 - 100, 30);
+    "#, false)?;
+
+    sleep(Duration::from_millis(1000)).await;
     
     // Take screenshot for debugging
     println!("Capturing screenshot for debugging...");
@@ -509,16 +731,19 @@ pub async fn search_google(keyword: &str) -> Result<Vec<SearchResult>> {
         const input = document.querySelector('textarea[name="q"]') || document.querySelector('input[name="q"]');
         if (input) { input.value = ''; input.focus(); }
     "#, false)?;
-    sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(500)).await;
     
     // Type query naturally for personalized results (profile-based)
     println!("Typing query: {}...", keyword);
     for char in keyword.chars() {
         tab.type_str(&char.to_string())?;
-        sleep(Duration::from_millis(80 + (rand::random::<u64>() % 120))).await;
+        sleep(Duration::from_millis(100 + (rand::random::<u64>() % 150))).await;
     }
     
+    sleep(Duration::from_millis(500)).await;
+
     // 3. Submit
+    println!("Submitting search...");
     tab.press_key("Enter")?;
     tab.wait_until_navigated()?;
     println!("Search submitted.");
@@ -762,7 +987,52 @@ pub async fn search_google(keyword: &str) -> Result<Vec<SearchResult>> {
         let _ = std::fs::write("debug/debug_google_tier1.html", &html_content);
     }
 
-    Ok(results)
+    // Extract People Also Ask
+    let html_content = tab.get_content()?;
+    let document = Html::parse_document(&html_content);
+    
+    let paa_selector = Selector::parse(".related-question-pair .s75CSd").unwrap();
+    let mut people_also_ask: Vec<String> = Vec::new(); // Explicit type
+    for element in document.select(&paa_selector) {
+        if let Some(text) = element.text().next() {
+            people_also_ask.push(text.to_string());
+        }
+    }
+
+    // Extract Related Searches
+    let related_selector = Selector::parse(".s75CSd, .k8XOCe, .related-searches-list a").unwrap();
+    let mut related_searches: Vec<String> = Vec::new(); // Explicit type
+    for element in document.select(&related_selector) {
+         if let Some(text) = element.text().next() {
+             let s = text.to_string();
+             if s.len() > 3 {
+                 related_searches.push(s);
+             }
+         }
+    }
+
+    // Extract Total Results
+    let count_selector = Selector::parse("#result-stats").unwrap();
+    let total_results = document.select(&count_selector).next()
+        .map(|e| e.text().collect::<String>());
+        
+    // Extract Featured Snippet
+    let snippet_selector = Selector::parse(".xpdopen .block-component, .c2xzTb").unwrap();
+    let featured_snippet: Option<FeaturedSnippet> = document.select(&snippet_selector).next().map(|el| {
+        FeaturedSnippet {
+            content: el.text().collect::<String>(),
+            source_url: None,
+            source_title: None,
+        }
+    });
+
+    Ok(SerpData {
+        results,
+        people_also_ask,
+        related_searches,
+        featured_snippet,
+        total_results,
+    })
 }
 
 pub async fn extract_content(url: &str) -> Result<ExtractedContent> {
@@ -819,6 +1089,121 @@ pub async fn extract_content(url: &str) -> Result<ExtractedContent> {
         meta_description,
         meta_author,
         meta_date,
+    })
+}
+
+/// Deep extraction function that returns comprehensive WebsiteData
+pub async fn extract_website_data(url: &str) -> Result<WebsiteData> {
+    // Decode Bing/Google redirect URLs to get actual destination
+    let actual_url = decode_search_url(url);
+    println!("🔍 Deep extracting data from: {}", actual_url);
+    
+    // Use proper User-Agent and follow redirects
+    use rand::seq::SliceRandom;
+    let user_agent = USER_AGENTS.choose(&mut rand::thread_rng())
+        .unwrap_or(&"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36");
+
+    let client = reqwest::Client::builder()
+        .user_agent(*user_agent)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    
+    let resp: reqwest::Response = client.get(&actual_url)
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send().await?;
+    let final_url = resp.url().to_string();
+    println!("Final URL: {}", final_url);
+    
+    let html = resp.text().await?;
+    let html_size = html.len() as u32;
+    println!("HTML size: {} bytes", html_size);
+    
+    // Parse document
+    let document = Html::parse_document(&html);
+    
+    // Extract base domain for link filtering
+    let base_domain = reqwest::Url::parse(&final_url)
+        .map(|u| u.host_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    
+    // 1. Extract title
+    let title_selector = Selector::parse("title").unwrap();
+    let title = document.select(&title_selector).next()
+        .map(|e| e.text().collect::<String>())
+        .unwrap_or_default();
+    
+    // 2. Extract meta tags
+    let desc_selector = Selector::parse("meta[name='description']").unwrap();
+    let keywords_selector = Selector::parse("meta[name='keywords']").unwrap();
+    let author_selector = Selector::parse("meta[name='author']").unwrap();
+    let date_selector = Selector::parse("meta[property='article:published_time']").unwrap();
+    
+    let meta_description = document.select(&desc_selector).next()
+        .and_then(|e| e.value().attr("content").map(|s| s.to_string()));
+    let meta_keywords = document.select(&keywords_selector).next()
+        .and_then(|e| e.value().attr("content").map(|s| s.to_string()));
+    let meta_author = document.select(&author_selector).next()
+        .and_then(|e| e.value().attr("content").map(|s| s.to_string()));
+    let meta_date = document.select(&date_selector).next()
+        .and_then(|e| e.value().attr("content").map(|s| s.to_string()));
+    
+    // 3. Extract main text using Readability
+    let mut reader = Cursor::new(html.as_bytes());
+    let main_text = match readability::extractor::extract(&mut reader, &reqwest::Url::parse(&final_url)?) {
+        Ok(product) => product.text,
+        Err(_) => String::new(),
+    };
+    let word_count = main_text.split_whitespace().count() as u32;
+    
+    // 4. Extract Schema.org/JSON-LD structured data
+    let schema_org = extract_schema_org(&html);
+    if !schema_org.is_empty() {
+        println!("📊 Found {} Schema.org objects", schema_org.len());
+    }
+    
+    // 5. Extract Open Graph data
+    let (og_title, og_description, og_image, og_type) = extract_open_graph(&document);
+    
+    // 6. Extract contact information
+    let emails = extract_emails(&html);
+    let phone_numbers = extract_phone_numbers(&main_text);
+    if !emails.is_empty() {
+        println!("📧 Found {} emails", emails.len());
+    }
+    if !phone_numbers.is_empty() {
+        println!("📞 Found {} phone numbers", phone_numbers.len());
+    }
+    
+    // 7. Extract images
+    let images = extract_images(&document, &format!("https://{}", base_domain));
+    println!("🖼️ Found {} images", images.len());
+    
+    // 8. Extract outbound links
+    let outbound_links = extract_outbound_links(&document, &base_domain);
+    println!("🔗 Found {} outbound links", outbound_links.len());
+    
+    Ok(WebsiteData {
+        url: actual_url,
+        final_url,
+        title,
+        meta_description,
+        meta_keywords,
+        meta_author,
+        meta_date,
+        main_text,
+        html: html.clone(),
+        word_count,
+        html_size,
+        schema_org,
+        og_title,
+        og_description,
+        og_image,
+        og_type,
+        emails,
+        phone_numbers,
+        images,
+        outbound_links,
     })
 }
 
