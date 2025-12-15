@@ -386,23 +386,37 @@ pub async fn search_bing(keyword: &str) -> Result<SerpData> {
     // Layer 3: Behavioral Realism (Human-Like Interaction)
     // Random mouse movements via JS (Bezier-like curves simulated with steps)
     let _ = tab.evaluate(r#"
+        function bezier(t, p0, p1, p2, p3) {
+            const cX = 3 * (p1.x - p0.x), bX = 3 * (p2.x - p1.x) - cX, aX = p3.x - p0.x - cX - bX;
+            const cY = 3 * (p1.y - p0.y), bY = 3 * (p2.y - p1.y) - cY, aY = p3.y - p0.y - cY - bY;
+            const x = (aX * Math.pow(t, 3)) + (bX * Math.pow(t, 2)) + (cX * t) + p0.x;
+            const y = (aY * Math.pow(t, 3)) + (bY * Math.pow(t, 2)) + (cY * t) + p0.y;
+            return {x: x, y: y};
+        }
+
         async function humanMouseMove(startX, startY, endX, endY, steps) {
+            // Random control points for Bezier curve
+            const p0 = {x: startX, y: startY};
+            const p3 = {x: endX, y: endY};
+            const p1 = {x: startX + (Math.random() * (endX - startX)), y: startY + (Math.random() * (endY - startY))};
+            const p2 = {x: startX + (Math.random() * (endX - startX)), y: startY + (Math.random() * (endY - startY))};
+
             for (let i = 0; i <= steps; i++) {
                 const t = i / steps;
-                // Linear interpolation for now, can be upgraded to Bezier
-                const x = startX + (endX - startX) * t;
-                const y = startY + (endY - startY) * t;
+                const pos = bezier(t, p0, p1, p2, p3);
+                
                 document.dispatchEvent(new MouseEvent('mousemove', {
                     view: window,
                     bubbles: true,
                     cancelable: true,
-                    clientX: x,
-                    clientY: y
+                    clientX: pos.x,
+                    clientY: pos.y
                 }));
-                await new Promise(r => setTimeout(r, 10 + Math.random() * 20));
+                // Non-linear timing
+                await new Promise(r => setTimeout(r, 10 + Math.random() * 15));
             }
         }
-        humanMouseMove(100, 100, 500, 400, 20);
+        humanMouseMove(100, 100, 500, 400, 25);
     "#, false)?;
     
     sleep(Duration::from_millis(500)).await;
@@ -412,25 +426,59 @@ pub async fn search_bing(keyword: &str) -> Result<SerpData> {
         (function() {
             let scrolled = 0;
             const interval = setInterval(() => {
-                window.scrollBy(0, 100);
+                window.scrollBy(0, 50 + Math.random() * 50);
                 scrolled += 100;
-                if (scrolled > 500) {
+                if (scrolled > 600) {
                     clearInterval(interval);
-                    window.scrollBy(0, -200);
+                    window.scrollBy(0, -200); // Scroll back up slightly
                 }
-            }, 150);
+            }, 100 + Math.random() * 100);
         })();
     "#, false)?;  // Non-blocking
     
     // Wait for JavaScript to render results
     println!("Waiting for Bing DOM mutations to complete...");
-    sleep(Duration::from_secs(2)).await;  // Simple wait for page to settle
+    sleep(Duration::from_secs(3)).await;  // Simple wait for page to settle
     
-    // Wait for results to appear
+    // Improved Bing Selectors (Robust)
+    // 1. Check for Challenge first
+    let html_content = tab.get_content()?;
+    let challenge_patterns = [
+        "Prove you're not a robot",
+        "humanity",
+        "unusual traffic",
+        "automated requests",
+        "hcaptcha",
+        "recaptcha",
+        "turnstile",
+        "security check",
+        "One last step"
+    ];
+    let is_challenge = challenge_patterns.iter().any(|p| html_content.to_lowercase().contains(&p.to_lowercase()));
+
+    if is_challenge {
+         eprintln!("⚠️ CHALLENGE DETECTED: Bing served Challenge/Captcha page via AWS IP");
+         let _ = std::fs::write("debug/debug_bing_challenge_detected.html", &html_content);
+         if let Ok(screenshot) = tab.capture_screenshot(
+            headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption::Png,
+            None, None, true
+         ) {
+             let _ = std::fs::write("debug/debug_bing_challenge.png", &screenshot);
+         }
+         return Err(anyhow::anyhow!("Bing Challenge Detected")); // Fail early to trigger retry/proxy rotation if implemented
+    }
+
+    // 2. Wait for ANY valid result container
     println!("Waiting for Bing results...");
-    match tab.wait_for_element_with_custom_timeout("li.b_algo", Duration::from_secs(10)) {
+    let result_wait = tab.wait_for_element_with_custom_timeout("#b_results > li.b_algo, #b_pole, .b_algo", Duration::from_secs(10));
+    
+    match result_wait {
         Ok(_) => println!("Found results element."),
-        Err(e) => println!("Wait for results timed out or failed: {}", e),
+        Err(e) => {
+             println!("Wait for results timed out: {}", e);
+             // Dump debug info
+             let _ = std::fs::write("debug/debug_bing_no_results.html", &tab.get_content().unwrap_or_default());
+        },
     }
     
     // Take screenshot for debugging
@@ -1385,4 +1433,76 @@ fn base64_decode(input: &str) -> Result<Vec<u8>> {
     }
     
     Ok(output)
+}
+
+// ============================================================================
+// Generic Forum Crawler
+// ============================================================================
+pub async fn generic_crawl(url: &str, selectors: Option<std::collections::HashMap<String, String>>) -> Result<SerpData> {
+    println!("🌐 Starting Generic Crawl for: {}", url);
+    use rand::seq::SliceRandom;
+    
+    // Minimal browser setup for brevity (reusing user agent list from top of file)
+    let user_agent = USER_AGENTS.choose(&mut rand::thread_rng())
+        .unwrap_or(&"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36");
+
+    let args = vec![
+        std::ffi::OsStr::new("--disable-blink-features=AutomationControlled"),
+        std::ffi::OsStr::new("--no-sandbox"),
+        std::ffi::OsStr::new("--disable-dev-shm-usage"),
+        std::ffi::OsStr::new("--headless"),
+        std::ffi::OsStr::new("--ignore-certificate-errors"),
+    ];
+
+    let browser = Browser::new(LaunchOptions {
+        headless: true, 
+        args,
+        window_size: Some((1920, 1080)),
+        ..Default::default()
+    })?;
+
+    let tab = browser.new_tab()?;
+    tab.navigate_to(url)?;
+    tab.wait_until_navigated()?;
+    
+    // Simulate scroll for forums (often lazy load)
+    let _ = tab.evaluate("window.scrollTo(0, document.body.scrollHeight);", false);
+    sleep(Duration::from_secs(2)).await;
+
+    let html_content = tab.get_content()?;
+    let document = Html::parse_document(&html_content);
+    
+    let mut results = Vec::new();
+    let mut snippet_acc = String::new();
+
+    if let Some(sel_map) = selectors {
+        for (key, selector_str) in sel_map {
+             if let Ok(selector) = Selector::parse(&selector_str) {
+                 snippet_acc.push_str(&format!("--- {} ---\n", key));
+                 for element in document.select(&selector) {
+                     snippet_acc.push_str(&element.text().collect::<String>());
+                     snippet_acc.push('\n');
+                 }
+             }
+        }
+    } else {
+        // Default: Extract Title + H1
+        snippet_acc.push_str("No selectors provided. Dumping title.\n");
+        let title_sel = Selector::parse("title").unwrap();
+        if let Some(t) = document.select(&title_sel).next() {
+            snippet_acc.push_str(&t.text().collect::<String>());
+        }
+    }
+
+    results.push(SearchResult {
+        title: "Forum Data".to_string(),
+        link: url.to_string(),
+        snippet: snippet_acc,
+    });
+
+    Ok(SerpData {
+        results,
+        total_results: Some("1".to_string()),
+        ..Default::default()
+    })
 }

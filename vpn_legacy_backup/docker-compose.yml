@@ -1,0 +1,13 @@
+services:
+  sing-box:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: vpn-server
+    restart: always
+    network_mode: "host"
+    volumes:
+      - ./singbox-config.json:/etc/sing-box/config.json
+      - ./hysteria.crt:/etc/sing-box/hysteria.crt
+      - ./hysteria.key:/etc/sing-box/hysteria.key
+    command: run -c /etc/sing-box/config.json
+    environment:
+      - TZ=Asia/Rangoon

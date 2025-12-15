@@ -1,0 +1,17 @@
+steps:
+  build:
+    image: rust:latest
+    commands:
+      - echo "🚀 Starting CI Build..."
+      - cargo --version
+      - cd rust-crawler
+      - cargo build --verbose
+      - echo "✅ Build Verification Complete"
+
+  # Optional: Dry-run Docker build to ensure Dockerfile is valid
+  docker-check:
+    image: plugins/docker
+    settings:
+      dry_run: true
+      repo: rust-crawler
+      dockerfile: rust-crawler/Dockerfile

@@ -2,7 +2,7 @@
 set -e
 
 SERVER_IP="54.179.175.198"
-KEY_FILE="sg-crawling-key.pem"
+KEY_FILE="/home/guest/.ssh/crawling_keys/sg-crawling-key.pem"
 
 echo "🚀 Starting Local Build & Deploy..."
 

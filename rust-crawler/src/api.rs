@@ -11,10 +11,14 @@ use crate::crawler;
 use utoipa::{ToSchema, OpenApi};
 use chrono::NaiveDateTime;
 use crate::proxy::{PROXY_MANAGER, ProxyInfo, ProxyStats};
+use crate::storage::StorageManager;
+use crate::queue::QueueManager;
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    pub storage: StorageManager,
+    pub queue: QueueManager,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -22,7 +26,9 @@ pub struct CrawlRequest {
     #[schema(example = "rust programming")]
     pub keyword: String,
     #[schema(example = "bing", default = "bing")]
-    pub engine: Option<String>, 
+    pub engine: Option<String>,
+    #[schema(example = "{\"title\": \"h1\", \"content\": \".post-body\"}")]
+    pub selectors: Option<std::collections::HashMap<String, String>>, 
 }
 
 #[derive(Serialize, ToSchema)]
@@ -75,108 +81,33 @@ pub async fn trigger_crawl(
     Json(payload): Json<CrawlRequest>,
 ) -> Json<CrawlResponse> {
     let task_id = Uuid::new_v4().to_string();
-    let pool = state.pool.clone();
     let keyword = payload.keyword.clone();
     let engine = payload.engine.unwrap_or_else(|| "bing".to_string());
-    let engine_clone = engine.clone();
 
-    let task_id_clone = task_id.clone();
-    tokio::spawn(async move {
-        // 1. Search
-        let search_results = if engine_clone == "google" {
-            crawler::search_google(&keyword).await
-        } else {
-            crawler::search_bing(&keyword).await
-        };
+    let job = crate::queue::CrawlJob {
+        id: task_id.clone(),
+        keyword,
+        engine,
+        selectors: payload.selectors,
+    };
 
-        match search_results {
-            Ok(serp_data) => {
-                // 2. Extract content from the first result (Deep Crawl)
-                let first_result_data = if let Some(first_result) = serp_data.results.first() {
-                    crawler::extract_website_data(&first_result.link).await.ok()
-                } else {
-                    None
-                };
-
-                let results_json = serde_json::to_string(&serp_data).unwrap_or_default();
-
-                // 3. Save to Disk (User Requirement)
-                let storage_path = std::env::var("STORAGE_PATH").unwrap_or_else(|_| "crawl-results".to_string());
-                if let Err(e) = std::fs::create_dir_all(&storage_path) {
-                    eprintln!("Failed to create storage dir: {}", e);
-                }
-
-                let safe_keyword = keyword.replace(" ", "_").replace("/", "-");
-                let filename_base = format!("{}/{}_{}_{}", storage_path, safe_keyword, engine, task_id_clone);
-
-                // Decode Bing/Google redirect URLs to get actual website list
-                let websites: Vec<String> = serp_data.results.iter().map(|r| {
-                    crawler::decode_search_url(&r.link)
-                }).collect();
-
-                // Create structured response with keyword (business requirement)
-                let structured_response = serde_json::json!({
-                    "keyword": &keyword,
-                    "engine": &engine,
-                    "websites": &websites,
-                    "serp_data": &serp_data,
-                    "first_result_data": &first_result_data,
-                    "results_count": serp_data.results.len()
-                });
-
-                // Save JSON (pretty-printed for readability)
-                let results_json_pretty = serde_json::to_string_pretty(&structured_response).unwrap_or_else(|_| results_json.clone());
-                if let Err(e) = std::fs::write(format!("{}.json", filename_base), &results_json_pretty) {
-                    eprintln!("Failed to write JSON: {}", e);
-                }
-
-                // Prepare data for DB
-                let (extracted_text, extracted_html, md, ma, mdate) = if let Some(data) = &first_result_data {
-                    (
-                        data.main_text.clone(),
-                        data.html.clone(),
-                        data.meta_description.clone(),
-                        data.meta_author.clone(),
-                        data.meta_date.clone()
-                    )
-                } else {
-                    (String::new(), String::new(), None, None, None)
-                };
-
-                // Save HTML
-                if !extracted_html.is_empty() {
-                    if let Err(e) = std::fs::write(format!("{}.html", filename_base), &extracted_html) {
-                        eprintln!("Failed to write HTML: {}", e);
-                    }
-                }
-
-                // 4. Save to DB
-                let _ = sqlx::query(
-                    "INSERT INTO tasks (id, keyword, engine, status, results_json, extracted_text, first_page_html, meta_description, meta_author, meta_date) VALUES ($1, $2, $3, 'completed', $4, $5, $6, $7, $8, $9)"
-                )
-                .bind(&task_id_clone)
-                .bind(&keyword)
-                .bind(&engine_clone)
-                .bind(&results_json)
-                .bind(&extracted_text)
-                .bind(&extracted_html)
-                .bind(&md)
-                .bind(&ma)
-                .bind(&mdate)
-                .execute(&pool)
-                .await;
-            }
-            Err(e) => {
-                eprintln!("Crawl failed: {}", e);
-                let _ = std::fs::write("crawl_errors.log", format!("Error: {}\n", e));
-            }
+    // Push to Redis Queue
+    match state.queue.push_job(job).await {
+        Ok(_) => {
+            println!("✅ [API] Job pushed to queue: {}", task_id);
+            Json(CrawlResponse {
+                task_id,
+                message: "Crawl job queued successfully".to_string(),
+            })
+        },
+        Err(e) => {
+            eprintln!("❌ [API] Failed to queue job: {}", e);
+            Json(CrawlResponse {
+                task_id,
+                message: "Failed to queue job".to_string(),
+            })
         }
-    });
-
-    Json(CrawlResponse {
-        task_id,
-        message: "Crawl started".to_string(),
-    })
+    }
 }
 
 #[utoipa::path(

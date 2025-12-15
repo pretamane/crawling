@@ -4,8 +4,8 @@ set -e
 echo "🚀 Starting Local Environment..."
 
 # 1. Start Database and Adminer in background
-echo "📦 Spinning up PostgreSQL and Adminer..."
-docker-compose up -d db adminer
+echo "📦 Spinning up PostgreSQL, Redis, MinIO, and Adminer..."
+docker-compose up -d db redis minio adminer
 
 # 2. Wait for DB availability (simple sleep)
 echo "⏳ Waiting for Database to be ready..."

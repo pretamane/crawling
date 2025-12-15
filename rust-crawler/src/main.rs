@@ -2,6 +2,10 @@ mod api;
 mod crawler;
 mod db;
 mod proxy;
+mod storage;
+mod queue;
+mod worker;
+mod scheduler;
 
 use axum::{
     routing::{get, post},
@@ -55,7 +59,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     
     // Robust Connection Retry Loop
     println!("🔌 Connecting to Database...");
@@ -86,7 +89,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     db::init_db(&pool).await?;
 
-    let state = Arc::new(api::AppState { pool });
+    let storage = storage::StorageManager::new().await.expect("Failed to init MinIO");
+    let queue = queue::QueueManager::new().await.expect("Failed to init Redis");
+
+    let state = Arc::new(api::AppState { pool, storage, queue });
+
+    // Start Background Worker
+    let worker_state = state.clone();
+    tokio::spawn(async move {
+        worker::start_worker(worker_state).await;
+    });
+
+    // Start Central Scheduler (Rust)
+    let scheduler_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = scheduler::start_scheduler(scheduler_state).await {
+            eprintln!("🔥 Scheduler Error: {}", e);
+        }
+    });
 
     let app = Router::new()
         .merge(SwaggerUi::new("/rust-crawler-swagger").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -102,7 +122,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest_service("/", ServeDir::new("static")) // Serve Dashboard
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("Listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
 

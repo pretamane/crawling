@@ -1,0 +1,47 @@
+{
+    "log": {
+        "loglevel": "warning"
+    },
+    "inbounds": [
+        {
+            "port": 4433,
+            "protocol": "vless",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "3f6362bd-f3e0-47fe-953b-5fd49f1df7e5",
+                        "flow": "xtls-rprx-vision"
+                    }
+                ],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "show": false,
+                    "dest": "s3.ap-southeast-1.amazonaws.com:443",
+                    "xver": 0,
+                    "serverNames": [
+                        "s3.ap-southeast-1.amazonaws.com",
+                        "s3.amazonaws.com"
+                    ],
+                    "privateKey": "YPLyUOin67ZEDEtULCQdaIuMxo4EBFfCudXWtrM-vFM",
+                    "shortIds": [
+                        "1a2b3c4d"
+                    ]
+                }
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "freedom",
+            "tag": "direct"
+        },
+        {
+            "protocol": "blackhole",
+            "tag": "block"
+        }
+    ]
+}

@@ -1,0 +1,19 @@
+services:
+  vpn-singbox:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: vpn-singbox
+    restart: always
+    network_mode: "host"
+    volumes:
+      - ./config.json:/etc/sing-box/config.json
+      - ./selfsigned.crt:/etc/sing-box/selfsigned.crt
+      - ./selfsigned.key:/etc/sing-box/selfsigned.key
+      - ./hysteria.crt:/etc/sing-box/hysteria.crt
+      - ./hysteria.key:/etc/sing-box/hysteria.key
+    environment:
+      - TZ=Asia/Rangoon
+    command: run -c /etc/sing-box/config.json
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun

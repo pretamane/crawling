@@ -1,3 +1,4 @@
+version: "3.8"
 services:
   db:
    image: postgres:15-alpine
@@ -19,6 +20,48 @@ services:
     depends_on:
       - db
 
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    restart: always
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio_user
+      MINIO_ROOT_PASSWORD: minio_password
+    volumes:
+      - minio_data:/data
+
+  # Captcha Solver (Cloudflare Bypass)
+  # Internal: http://flaresolverr:8191/v1
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: always
+    environment:
+      - LOG_LEVEL=info
+      - TZ=Asia/Rangoon
+
+  # NAS Simulation (Samba)
+  # Internal: Access via service name "samba"
+  samba:
+    image: dperson/samba
+    restart: always
+    environment:
+      - TZ=Asia/Rangoon
+      - USER=nas_user;nas_password
+      - SHARE=nas-share;/nas-share;yes;no;no;nas_user;;;
+    volumes:
+      - nas_data:/nas-share
+
   # Rust Crawler (Production)
   crawler:
     build: ./rust-crawler
@@ -28,14 +71,25 @@ services:
     environment:
       - DATABASE_URL=postgres://crawler:crawler_password@db:5432/crawling_db
       - RUST_LOG=info
-      - STORAGE_PATH=/app/results
+      - STORAGE_PATH=/mnt/nas/results
       - PROXY_LIST=${PROXY_LIST:-}
       - PROXY_ROTATION=${PROXY_ROTATION:-roundrobin}
       - PROXY_MAX_FAILS=${PROXY_MAX_FAILS:-3}
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ROOT_USER=minio_user
+      - MINIO_ROOT_PASSWORD=minio_password
+      - MINIO_BUCKET=crawler-data
+      - REDIS_URL=redis://redis:6379
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=minio_user
+      - AWS_SECRET_ACCESS_KEY=minio_password
     depends_on:
       - db
+      - minio
+      - redis
     volumes:
-      - ./crawl-results:/app/results
+      - nas_data:/mnt/nas/results
       - ./rust-crawler/debug:/app/debug
       - ./rust-crawler/logs:/app/logs
 
@@ -56,3 +110,6 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  redis_data:
+  minio_data:
+  nas_data:

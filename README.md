@@ -186,4 +186,3 @@ graph TD
 ## License
 MIT
 
-# CI trigger

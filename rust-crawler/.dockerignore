@@ -1,0 +1,8 @@
+target/
+**/*.rs.bk
+**/*.rs.bk
+.git
+.env
+crawl-results/
+debug/
+logs/

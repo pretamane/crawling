@@ -42,3 +42,4 @@ crawl-results/
 postgres_data/
 caddy_data/
 caddy_config/
+docker-compose.woodpecker.yml
