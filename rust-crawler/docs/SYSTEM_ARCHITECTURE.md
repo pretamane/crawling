@@ -54,9 +54,11 @@ graph TD
     *   **Protocol**: RESP (REdis Serialization Protocol).
     *   **Queue Pattern**: Producer-Consumer.
     *   **Keys**: `crawl_queue` (List).
-    *   **Ops**: 
-        *   Producer: `lpush("crawl_queue", json)` (O(1)).
-        *   Consumer: Worker polls via `rpop` (O(1)).
+    *   **Ops (Performance)**: 
+        *   **Producer**: `lpush("crawl_queue", json)` **(O(1) - Constant Time)**.
+            *   *Why it matters*: Pushing a job takes the same nanosecond-scale time whether the queue has 0 items or 10 million items. This guarantees the API never lags under heavy load.
+        *   **Consumer**: Worker polls via `rpop` **(O(1) - Constant Time)**.
+            *   *Why it matters*: Fetching the next job is instant. It simply detaches the tail element of the linked list. Cost does not increase with queue size.
     *   **Payload Schema**:
         ```json
         {
@@ -77,9 +79,11 @@ graph TD
         *   **Flags**: `--disable-blink-features=AutomationControlled`, `--no-sandbox`.
         *   **CDP Method**: `Page.addScriptToEvaluateOnNewDocument` injects JS to delete `navigator.webdriver` before page load.
         *   **User Agent**: rotated per session via `Network.setUserAgentOverride`.
-    *   **Authentication**: 
+    *   **Authentication (Security Focus)**: 
         *   **CDP Method**: `Network.setCookie` injects array from `cookies.json`.
-        *   **Domain Matching**: Strict substring matching to avoid cross-domain leakage.
+        *   **Domain Matching**: **Strict Key-based Substring Matching**.
+            *   *Mechanism*: The worker iterates `cookies.json`. If the key is `facebook.com`, it allows injection into `www.facebook.com` or `m.facebook.com` but **never** into `google.com` or `face-book-phishing.com`.
+            *   *Why it matters*: Prevents **Cross-Domain Session Leakage**, ensuring high-value session cookies are never sent to untrusted 3rd party trackers or wrong contexts.
 
 ### 2.3 The Intelligence Plane (AI/ML)
 *   **Communication**: Internal HTTP/1.1 REST (`reqwest` -> `FastAPI`).
